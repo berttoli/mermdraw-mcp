@@ -31,12 +31,13 @@ fn core() -> Option<PathBuf> {
 }
 
 /// Stops a process the test started when it goes out of scope, so a failing assertion can't leave an editor running.
+#[cfg(unix)]
 enum Stop {
     Child(std::process::Child),
-    #[cfg_attr(not(unix), allow(dead_code))]
     Pid(String),
 }
 
+#[cfg(unix)]
 impl Drop for Stop {
     fn drop(&mut self) {
         match self {

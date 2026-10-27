@@ -43,7 +43,7 @@ expect "mermdraw addons ls lists it" "$("$CORE" addons ls)" "mcp"
 expect "mermdraw mcp --version runs the installed addon" "$("$CORE" mcp --version)" "mermdraw-mcp $("$BIN" --version | cut -d' ' -f2)"
 
 mkdir -p "$WORK/project/.git" "$WORK/project/docs"
-printf '# Shop\n\n```mermaid\nflowchart LR\n    web --> api\n```\n' >"$WORK/project/docs/shop.md"
+printf '# Shop\n\n\140\140\140mermaid\nflowchart LR\n    web --> api\n\140\140\140\n' >"$WORK/project/docs/shop.md" # \140 is a backtick
 meta='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}'
 out="$(cd "$WORK/project" && printf '%s\n' \
   "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"server/discover\",\"params\":{$meta}}" \

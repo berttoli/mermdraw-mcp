@@ -5,7 +5,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="${1:-$ROOT/target/release/mermdraw-mcp}"
+BIN_ARG="${1:-$ROOT/target/release/mermdraw-mcp}"
+BIN="$(cd "$(dirname "$BIN_ARG")" && pwd)/$(basename "$BIN_ARG")" # absolute: the checks run from another folder
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
