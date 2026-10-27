@@ -1,0 +1,5 @@
+# Pinned so CI lints with the same clippy that was verified locally; bump deliberately.
+[toolchain]
+channel = "1.88.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

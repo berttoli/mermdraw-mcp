@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # release.yml runs the whole suite on the tagged commit before building binaries
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # the mermdraw the end-to-end and install tests run against (needs its --json commands, 0.2+)
+  MERMDRAW_REF: main
+
+jobs:
+  rust:
+    name: Rust · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out mermdraw
+        if: runner.os != 'Windows'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: berttoli/mermdraw
+          ref: ${{ env.MERMDRAW_REF }}
+          path: mermdraw-core
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup toolchain install && rustup show active-toolchain
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: runner.os != 'Windows'
+        with:
+          workspaces: |
+            .
+            mermdraw-core
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: runner.os == 'Windows'
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Build mermdraw
+        if: runner.os != 'Windows'
+        run: cargo build --release --locked --manifest-path mermdraw-core/Cargo.toml
+      - name: Tests (unit, protocol, and end to end against mermdraw)
+        if: runner.os != 'Windows'
+        env:
+          MERMDRAW_CORE: ${{ github.workspace }}/mermdraw-core/target/release/mermdraw
+          MERMDRAW_E2E_REQUIRED: "1"
+        run: cargo test --locked
+      - name: Tests (unit and protocol)
+        if: runner.os == 'Windows'
+        run: cargo test --locked
+      - name: Release build
+        run: cargo build --release --locked
+      - name: Smoke test (stdio, both protocol eras)
+        if: runner.os != 'Windows'
+        run: tests/smoke.sh target/release/mermdraw-mcp
+
+  package:
+    name: Package · static Linux binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out mermdraw
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: berttoli/mermdraw
+          ref: ${{ env.MERMDRAW_REF }}
+          path: mermdraw-core
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            .
+            mermdraw-core
+      - name: Lint release and test scripts
+        run: shellcheck scripts/*.sh tests/*.sh
+      - name: Build, package and verify the release archive
+        run: |
+          cargo build --release --locked --target x86_64-unknown-linux-musl
+          scripts/release.sh package x86_64-unknown-linux-musl target/x86_64-unknown-linux-musl/release/mermdraw-mcp dist
+          scripts/release.sh verify dist/mermdraw-mcp-x86_64-unknown-linux-musl.tar.gz
+      - name: Install it with mermdraw addons add mcp, run it as mermdraw mcp
+        run: |
+          cargo build --release --locked --manifest-path mermdraw-core/Cargo.toml
+          tests/install.sh mermdraw-core/target/release/mermdraw target/x86_64-unknown-linux-musl/release/mermdraw-mcp

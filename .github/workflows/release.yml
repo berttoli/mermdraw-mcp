@@ -1,0 +1,114 @@
+name: Release
+
+# Push a tag vX.Y.Z (or vX.Y.Z-rc.N) to run the full CI on that commit, build static
+# binaries for five targets, smoke-test each packaged archive on its own OS, attest
+# their provenance and open a *draft* GitHub release (a pre-release for -rc tags).
+# The asset names are the ones `mermdraw addons add mcp` downloads. Publishing the
+# draft is a manual step. Running this workflow by hand (Actions → Release → Run
+# workflow) is a dry run: everything except the release itself. Mirrors mermdraw's
+# release.yml and docs/RELEASING.md.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Tag matches Cargo.toml, Cargo.lock and CHANGELOG.md
+        id: check
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            scripts/release.sh check "$GITHUB_REF_NAME" | tee -a "$GITHUB_OUTPUT"
+          else
+            echo "Dry run from $GITHUB_REF_NAME: nothing will be released"
+            { echo "version=$(scripts/release.sh cargo-version)"; echo "prerelease=true"; } | tee -a "$GITHUB_OUTPUT"
+          fi
+
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build · ${{ matrix.target }}
+    needs: [check, ci]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Toolchain (from rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/mermdraw-mcp"
+          if [[ "$RUNNER_OS" == Windows ]]; then bin="$bin.exe"; fi
+          scripts/release.sh package "${{ matrix.target }}" "$bin" dist
+      - name: Verify the packaged binary
+        shell: bash
+        run: scripts/release.sh verify dist/mermdraw-mcp-${{ matrix.target }}.*
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mermdraw-mcp-${{ matrix.target }}
+          path: dist/mermdraw-mcp-${{ matrix.target }}.*
+          if-no-files-found: error
+
+  publish:
+    name: Draft GitHub release
+    needs: [check, build]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+      id-token: write # sign the provenance attestation
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          pattern: mermdraw-mcp-*
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum mermdraw-mcp-* | tee SHA256SUMS.txt
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/mermdraw-mcp-*
+      - name: Release notes
+        run: scripts/release.sh notes "${{ needs.check.outputs.version }}" | tee notes.md
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.check.outputs.prerelease }}
+        run: |
+          flags=(--draft --verify-tag --title "mermdraw-mcp $GITHUB_REF_NAME" --notes-file notes.md)
+          if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" dist/* "${flags[@]}"
+          echo "Draft ready: review the assets and notes, then publish it in the GitHub UI or with: gh release edit $GITHUB_REF_NAME --draft=false" >> "$GITHUB_STEP_SUMMARY"
