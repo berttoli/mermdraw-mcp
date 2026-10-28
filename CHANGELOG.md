@@ -11,6 +11,8 @@ First version: an MCP server addon for [mermdraw](https://github.com/berttoli/me
 - MCP 2026-07-28 (per-request `_meta`, `server/discover`, caching hints) and the earlier `initialize` handshake
   (2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05) over stdio, built on rmcp.
 - Speaks version 1 of mermdraw's addon contract and checks the `contract` field of every mermdraw answer.
-- `--root DIR` picks the project folder (default: the git repository around the working folder).
+- `--root DIR` picks the project folder (default: the git repository around the working folder, else that folder).
+  Without it, the home folder, a folder above it and the top of the disk are never the project, so a client that
+  starts the server there doesn't hand agents every markdown file on the machine; every tool asks for `--root` instead.
 - Release archives for Linux (static, x86_64 and arm64), macOS (Apple silicon and Intel) and Windows x64, named the
   way `mermdraw addons add mcp` expects, with SHA-256 checksums and build-provenance attestations.

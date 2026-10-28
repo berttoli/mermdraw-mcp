@@ -303,7 +303,7 @@ impl Mermdraw {
     )]
     async fn open_diagram(&self, Parameters(args): Parameters<OpenArgs>) -> Result<Json<Opened>, String> {
         let file = self.core.resolve(&args.file, Want::Doc)?;
-        if !self.core.root.join(&file).is_file() {
+        if !self.core.root()?.join(&file).is_file() {
             return Err(format!("{file} does not exist"));
         }
         let line = match (args.index, args.line) {

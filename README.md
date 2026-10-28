@@ -42,7 +42,9 @@ cargo install --git https://github.com/berttoli/mermdraw-mcp
 
 The server speaks MCP over stdio. Both the 2026-07-28 revision and the earlier `initialize`-based revisions
 (2025-11-25 back to 2024-11-05) are supported, so current and older clients both work. It works on the project it is
-started in: the git repository around its working folder, or the folder given with `--root`.
+started in: the git repository around its working folder (else that folder), or the folder given with `--root`. Without
+`--root` it never takes your home folder or the top of the disk as the project, where some desktop apps start servers:
+started there, every tool answers with an error asking for `--root`.
 
 **Claude Code**
 
