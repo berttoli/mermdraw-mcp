@@ -17,8 +17,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # the mermdraw the end-to-end and install tests run against (needs its --json commands, 0.2+)
-  MERMDRAW_REF: main
+  # the mermdraw the end-to-end and install tests run against: the oldest release this addon supports (README:
+  # "mermdraw 0.2 or later"), so a release is tested against what users may have. Bump it with that line.
+  MERMDRAW_REF: v0.2.0
 
 jobs:
   rust:

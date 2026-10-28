@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 — 2026-10-27
 
 First version: an MCP server addon for [mermdraw](https://github.com/berttoli/mermdraw), run as `mermdraw mcp`
 (needs mermdraw 0.2 or later).
