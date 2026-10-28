@@ -138,6 +138,52 @@ fn list_read_write_add() {
 }
 
 #[test]
+fn positions_place_new_nodes() {
+    let Some((root, mut mcp)) = setup("place") else { return };
+    let arch = root.join("docs/arch.md");
+    let read = ok(&mcp.call("read_diagram", json!({"file": "docs/arch.md"})));
+    let before = fs::read_to_string(&arch).unwrap();
+    let source = "flowchart LR\n    web[Web] --> api[API]\n    api --> db[(DB)]";
+    let write = |mcp: &mut Mcp, positions: Value| {
+        mcp.call(
+            "write_diagram",
+            json!({"file": "docs/arch.md", "index": 1, "source": source, "version": read["version"], "positions": positions}),
+        )
+    };
+    let bad_id = tool_error(&write(&mut mcp, json!({"my db": [1, 2]})));
+    assert!(bad_id.contains("without spaces"), "{bad_id}");
+
+    if read["positions"] == json!({}) {
+        // mermdraw 0.2 has no positions: reading works, placing says what to update
+        let msg = tool_error(&write(&mut mcp, json!({"db": [400, 0]})));
+        assert!(msg.contains("mermdraw 0.3 or later"), "{msg}");
+        assert_eq!(fs::read_to_string(&arch).unwrap(), before);
+        return fs::remove_dir_all(&root).unwrap();
+    }
+    assert_eq!(read["positions"], json!({"web": [0, 0], "api": [200, 0]}));
+    // a new node gets its spot and a moved one changes where it stands; the rest of the layout stays
+    let w = ok(&write(&mut mcp, json!({"db": [400, 0], "api": [210.4, 5]})));
+    assert_eq!((w["layout"].clone(), w["placed"].clone()), (json!("kept"), json!(2)));
+    assert!(fs::read_to_string(&arch).unwrap().contains("    %% mermdraw:layout web:0,0 api:210,5 db:400,0\n```"));
+    let again = ok(&mcp.call("read_diagram", json!({"file": "docs/arch.md"})));
+    assert_eq!(again["positions"], json!({"web": [0, 0], "api": [210, 5], "db": [400, 0]}));
+    let v = again["version"].clone();
+
+    // refusals leave the file alone
+    let now = fs::read_to_string(&arch).unwrap();
+    let ghost = mcp
+        .call("write_diagram", json!({"file": "docs/arch.md", "index": 1, "source": source, "version": v, "positions": {"ghost": [1, 2]}}));
+    assert!(tool_error(&ghost).contains("has no node ghost"));
+    let seq = mcp.call(
+        "write_diagram",
+        json!({"file": "docs/arch.md", "index": 2, "source": "sequenceDiagram\n  A->>B: hi", "version": v, "positions": {"A": [1, 2]}}),
+    );
+    assert!(tool_error(&seq).contains("no canvas positions"), "a diagram without a layout is laid out automatically");
+    assert_eq!(fs::read_to_string(&arch).unwrap(), now);
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn search_icons() {
     let Some((root, mut mcp)) = setup("icons") else { return };
     let none = ok(&mcp.call("search_icons", json!({"query": "zz-postgres"})));

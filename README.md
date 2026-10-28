@@ -104,8 +104,8 @@ client can't find `mermdraw`, use its full path (`which mermdraw`).
 | Tool | What it does |
 | --- | --- |
 | `list_diagrams` | The diagrams in a markdown file, or in every markdown file under a folder (default: the project): index, type, title, lines, and each file's version |
-| `read_diagram` | One diagram's mermaid source (without fences or the layout line) and the file's version |
-| `write_diagram` | Replaces a diagram with a new source, given the version it read. Keeps the canvas positions; a stale version is refused |
+| `read_diagram` | One diagram's mermaid source (without fences or the layout line), the file's version, and the canvas position of each node |
+| `write_diagram` | Replaces a diagram with a new source, given the version it read. Keeps the canvas positions, and places the nodes it adds where the agent says (mermdraw 0.3+); a stale version is refused |
 | `add_diagram` | Appends a diagram to a markdown file, under a `## title` heading if given; creates the file if needed |
 | `search_icons` | Finds logos in the installed icon packs (`mermdraw icons add logos devicon`), e.g. `postgres` → `logos:postgresql` |
 | `open_diagram` | Opens a diagram in mermdraw's editor in your browser, reusing the editor already running for the project or starting one in the background |
