@@ -9,6 +9,7 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData, Json, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// The tool list and server description never change while the server runs.
@@ -73,6 +74,10 @@ pub struct Diagram {
     pub end_line: usize,
     /// Whether the diagram has canvas positions; they are not part of `source` and are kept on write
     pub layout: bool,
+    /// The canvas position [x, y] of each positioned node, by node id (empty without a layout). Give nodes you add
+    /// positions near the nodes they connect to with write_diagram's `positions`
+    #[serde(default)]
+    pub positions: BTreeMap<String, [serde_json::Number; 2]>,
     /// The mermaid source, without the ``` fences and without the `%% mermdraw:layout` line
     pub source: String,
 }
@@ -86,6 +91,9 @@ pub struct Written {
     pub version: String,
     /// "kept": the diagram's canvas positions were carried over; "input": the source brought its own; "none": it has none
     pub layout: String,
+    /// How many of the given `positions` were set
+    #[serde(default)]
+    pub placed: usize,
     /// Whether the file was created
     pub created: bool,
 }
@@ -160,6 +168,11 @@ pub struct WriteArgs {
     pub source: String,
     /// The file version read_diagram (or list_diagrams) returned
     pub version: String,
+    /// Canvas positions to set, as {"node id": [x, y]}, in the coordinates of read_diagram's `positions`: a spot for
+    /// each node you add (near the nodes it connects to), or a new spot for one to move. Only for diagrams that have
+    /// positions; others are laid out automatically
+    #[serde(default)]
+    pub positions: Option<BTreeMap<String, [f64; 2]>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -215,7 +228,8 @@ impl Mermdraw {
     #[tool(
         description = "Read one mermaid diagram from a markdown (.md) or mermaid (.mmd) file: its source, without the ``` fences, \
                        and the file's version to pass to write_diagram. Canvas positions arranged in the mermdraw editor are left \
-                       out of the source (`layout` says whether there are any) and survive write_diagram on their own.",
+                       out of the source and survive write_diagram on their own; `positions` gives them by node id, so nodes you \
+                       add can be placed near the ones they connect to.",
         annotations(title = "Read a diagram", read_only_hint = true, open_world_hint = false)
     )]
     async fn read_diagram(&self, Parameters(args): Parameters<ReadArgs>) -> Result<Json<Diagram>, String> {
@@ -228,7 +242,9 @@ impl Mermdraw {
         description = "Replace diagram `index` of a file with a new mermaid source (the whole diagram, without ``` fences or a \
                        `%% mermdraw:layout` line). `version` must be the one read_diagram returned: if the file changed since, \
                        nothing is written and the error says so; read the diagram again and redo the change. Only that \
-                       diagram's lines change; the surrounding markdown and the diagram's canvas positions are kept.",
+                       diagram's lines change; the surrounding markdown and the diagram's canvas positions are kept. When the \
+                       diagram has positions, give each node you add a spot in `positions` (near the nodes it connects to, \
+                       clear of the others); a node without one is placed by the editor wherever there is room.",
         annotations(
             title = "Write a diagram",
             read_only_hint = false,
@@ -243,7 +259,21 @@ impl Mermdraw {
             return Err("index is 1-based: the first diagram is 1".into());
         }
         let n = args.index.to_string();
-        self.core.json(&["write", &file, &n, "--base", &args.version], Some(&args.source)).await.map(Json).map_err(|e| e.message())
+        let mut cmd = vec!["write".to_string(), file, n, "--base".into(), args.version];
+        for (id, [x, y]) in args.positions.unwrap_or_default() {
+            if id.is_empty() || id.contains(char::is_whitespace) || !x.is_finite() || !y.is_finite() {
+                return Err(format!("positions: {id:?} needs a node id without spaces and two numbers, e.g. \"reviews\": [910, -280]"));
+            }
+            cmd.extend(["--place".into(), format!("{id}:{},{}", x.round(), y.round())]);
+        }
+        let cmd: Vec<&str> = cmd.iter().map(String::as_str).collect();
+        self.core.json(&cmd, Some(&args.source)).await.map(Json).map_err(|e| match e.message() {
+            m if m.contains("unknown option --place") => {
+                "positions need mermdraw 0.3 or later: update mermdraw, or write without positions (the editor then places new nodes)"
+                    .to_string()
+            }
+            m => m,
+        })
     }
 
     #[tool(
@@ -303,7 +333,7 @@ impl Mermdraw {
     )]
     async fn open_diagram(&self, Parameters(args): Parameters<OpenArgs>) -> Result<Json<Opened>, String> {
         let file = self.core.resolve(&args.file, Want::Doc)?;
-        if !self.core.root.join(&file).is_file() {
+        if !self.core.root()?.join(&file).is_file() {
             return Err(format!("{file} does not exist"));
         }
         let line = match (args.index, args.line) {

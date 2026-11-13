@@ -24,12 +24,18 @@ fn main() {
             _ => die(&format!("unknown argument {} (try --help)", a.to_string_lossy())),
         }
     }
+    // without a project the server still starts, so the client shows it, and every tool call says what to do
     let root = match root {
-        Some(dir) => dir.canonicalize().unwrap_or_else(|e| die(&format!("--root {}: {e}", dir.display()))),
-        None => env::current_dir().and_then(|d| core::project_root(&d)).unwrap_or_else(|e| die(&format!("current folder: {e}"))),
+        Some(dir) => Ok(dir.canonicalize().unwrap_or_else(|e| die(&format!("--root {}: {e}", dir.display())))),
+        None => env::current_dir()
+            .map_err(|e| format!("No project folder: the current folder: {e}"))
+            .and_then(|d| core::project_root(&d, home().as_deref())),
     };
     let bin = env::var_os("MERMDRAW").filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| "mermdraw".into());
-    eprintln!("mermdraw-mcp {VERSION}: project {}, mermdraw at {}", root.display(), bin.display());
+    match &root {
+        Ok(dir) => eprintln!("mermdraw-mcp {VERSION}: project {}, mermdraw at {}", dir.display(), bin.display()),
+        Err(why) => eprintln!("mermdraw-mcp {VERSION}: {why}"),
+    }
     if std::io::stdin().is_terminal() {
         eprintln!("mermdraw-mcp: this is an MCP server for coding agents; it reads JSON-RPC on stdin (see --help for setup)");
     }
@@ -56,7 +62,8 @@ USAGE
   mermdraw-mcp [--root DIR]     directly
 
   --root DIR    the project folder the tools may read and write (default: the git repository
-                around the current folder, else the current folder)
+                around the current folder, else the current folder, but never your home folder
+                or the top of the disk: started there, the tools ask for --root)
   -h, --help    show this help
   -V, --version show version
 
@@ -71,6 +78,11 @@ SETUP
 Reads and writes go through mermdraw's --json commands (mermdraw 0.2 or later): $MERMDRAW,
 which `mermdraw mcp` sets, else mermdraw on PATH."
     );
+}
+
+/// The user's home folder, which is only the project when --root names it.
+fn home() -> Option<PathBuf> {
+    env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).filter(|h| !h.is_empty()).map(PathBuf::from)
 }
 
 fn die(msg: &str) -> ! {

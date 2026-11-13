@@ -17,17 +17,22 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # the mermdraw the end-to-end and install tests run against (needs its --json commands, 0.2+)
-  MERMDRAW_REF: main
+  # the mermdraw the end-to-end and install tests run against: the oldest release this addon supports (README:
+  # "mermdraw 0.2 or later"), so a release is tested against what users may have. Bump it with that line.
+  MERMDRAW_REF: v0.2.0
 
 jobs:
   rust:
-    name: Rust · ${{ matrix.os }}
+    name: Rust · ${{ matrix.os }}${{ matrix.mermdraw && format(' · mermdraw {0}', matrix.mermdraw) || '' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        # "" runs against MERMDRAW_REF; the extra job against main covers what mermdraw hasn't released yet
+        mermdraw: [""]
+        include:
+          - { os: ubuntu-latest, mermdraw: main }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check out mermdraw
@@ -35,7 +40,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: berttoli/mermdraw
-          ref: ${{ env.MERMDRAW_REF }}
+          ref: ${{ matrix.mermdraw || env.MERMDRAW_REF }}
           path: mermdraw-core
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup toolchain install && rustup show active-toolchain

@@ -20,8 +20,9 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(15);
 pub struct Core {
     /// `$MERMDRAW` (set when this runs as `mermdraw mcp`), else `mermdraw` on PATH
     pub bin: PathBuf,
-    /// the folder the tools may touch, canonical; relative paths in tool calls start here
-    pub root: PathBuf,
+    /// the folder the tools may touch, canonical; relative paths in tool calls start here. Err: why there is none,
+    /// which every tool call answers with
+    pub root: Result<PathBuf, String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -61,12 +62,18 @@ pub fn is_doc(path: &str) -> bool {
 }
 
 impl Core {
+    /// The project folder, or why there is none.
+    pub fn root(&self) -> Result<&Path, String> {
+        self.root.as_deref().map_err(Clone::clone)
+    }
+
     /// Runs `mermdraw ARGS… --json` in the root, with `stdin` as its input, and parses what it prints.
     pub async fn json<T: DeserializeOwned>(&self, args: &[&str], stdin: Option<&str>) -> Result<T, CoreError> {
+        let root = self.root().map_err(CoreError::Failed)?;
         let mut cmd = Command::new(&self.bin);
         cmd.args(args)
             .arg("--json")
-            .current_dir(&self.root)
+            .current_dir(root)
             .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -128,8 +135,9 @@ impl Core {
     /// Runs `mermdraw FILE:LINE`, which opens the diagram on the editor already serving the project, or becomes that
     /// editor. Returns the editor URL, and the process id of an editor it started, which keeps running on its own.
     pub async fn open(&self, file: &str, line: usize, browser: bool) -> Result<(String, Option<u32>), String> {
+        let root = self.root()?;
         let mut cmd = std::process::Command::new(&self.bin);
-        cmd.arg(format!("{file}:{line}")).current_dir(&self.root).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.arg(format!("{file}:{line}")).current_dir(root).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         if !browser {
             cmd.arg("--no-open");
         }
@@ -188,12 +196,13 @@ impl Core {
     /// whether by `..`, by an absolute path elsewhere or through a symlink, and anything but markdown and mermaid
     /// files (and folders, for `Want::DocOrDir`).
     pub fn resolve(&self, path: &str, want: Want) -> Result<String, String> {
+        let root = self.root()?;
         let path = path.trim();
         if path.is_empty() {
             return Err("give a path, relative to the project folder".into());
         }
         let given = Path::new(path);
-        let joined = if given.is_absolute() { given.to_path_buf() } else { self.root.join(given) };
+        let joined = if given.is_absolute() { given.to_path_buf() } else { root.join(given) };
         let mut full = PathBuf::new();
         for c in joined.components() {
             match c {
@@ -204,17 +213,17 @@ impl Core {
                 other => full.push(other),
             }
         }
-        let outside = || format!("{path} is outside the project folder {}", self.root.display());
-        if !full.starts_with(&self.root) {
+        let outside = || format!("{path} is outside the project folder {}", root.display());
+        if !full.starts_with(root) {
             return Err(outside());
         }
         // the deepest part of the path that exists must not lead out of the root through a symlink
-        let existing = full.ancestors().find(|p| p.exists()).unwrap_or(&self.root);
-        if !existing.canonicalize().map(|c| c.starts_with(&self.root)).unwrap_or(false) {
+        let existing = full.ancestors().find(|p| p.exists()).unwrap_or(root);
+        if !existing.canonicalize().map(|c| c.starts_with(root)).unwrap_or(false) {
             return Err(outside());
         }
         let rel: Vec<String> =
-            full.strip_prefix(&self.root).unwrap().components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+            full.strip_prefix(root).unwrap().components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
         let rel = if rel.is_empty() { ".".to_string() } else { rel.join("/") };
         let is_dir = full.is_dir();
         match want {
@@ -226,10 +235,31 @@ impl Core {
     }
 }
 
-/// The folder the tools work in: the git repository around `dir`, else `dir` itself.
-pub fn project_root(dir: &Path) -> io::Result<PathBuf> {
-    let dir = dir.canonicalize()?;
-    Ok(dir.ancestors().find(|d| d.join(".git").exists()).unwrap_or(&dir).to_path_buf())
+/// The folder the tools work in when no `--root` is given: the git repository around `dir`, else `dir` itself. Never
+/// the home folder, a folder above it or the top of the disk, where desktop clients often start servers: that would hand
+/// agents every markdown file on the machine. Err says why there is no project and what to do.
+pub fn project_root(dir: &Path, home: Option<&Path>) -> Result<PathBuf, String> {
+    let dir = dir.canonicalize().map_err(|e| format!("No project folder: the current folder {}: {e}", dir.display()))?;
+    let root = dir.ancestors().find(|d| d.join(".git").exists()).unwrap_or(&dir);
+    let home = home.map(|h| h.canonicalize().unwrap_or_else(|_| h.to_path_buf()));
+    let what = if root.parent().is_none() {
+        "the top of the disk"
+    } else if home.as_deref() == Some(root) {
+        "your home folder"
+    } else if home.as_deref().is_some_and(|h| h.starts_with(root)) {
+        "a folder above your home folder"
+    } else {
+        return Ok(root.to_path_buf());
+    };
+    let started = if root == dir {
+        format!("{}, {what}", dir.display())
+    } else {
+        format!("{}, in the git repository {}, {what}", dir.display(), root.display())
+    };
+    Err(format!(
+        "No project folder: mermdraw-mcp was started in {started}, and won't let agents reach every markdown file there. \
+         Add `--root /path/to/project` to its arguments in the MCP client's settings, or start the client in the project."
+    ))
 }
 
 #[cfg(test)]
@@ -249,7 +279,7 @@ mod tests {
         let root = scratch("resolve");
         fs::write(root.join("docs/a.md"), "# a\n").unwrap();
         fs::write(root.join(".env"), "SECRET=1\n").unwrap();
-        let core = Core { bin: "mermdraw".into(), root: root.clone() };
+        let core = Core { bin: "mermdraw".into(), root: Ok(root.clone()) };
         assert_eq!(core.resolve("docs/a.md", Want::Doc), Ok("docs/a.md".into()));
         assert_eq!(core.resolve("./docs/../docs/a.md", Want::Doc), Ok("docs/a.md".into()));
         assert_eq!(core.resolve(&root.join("docs/a.md").to_string_lossy(), Want::Doc), Ok("docs/a.md".into()));
@@ -276,8 +306,37 @@ mod tests {
     fn the_root_is_the_git_repository() {
         let root = scratch("root");
         fs::create_dir_all(root.join(".git")).unwrap();
-        assert_eq!(project_root(&root.join("docs")).unwrap(), root);
+        assert_eq!(project_root(&root.join("docs"), None).unwrap(), root);
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn never_the_home_folder_or_the_top_of_the_disk() {
+        let home = scratch("home");
+        let refused = |dir: &Path| project_root(dir, Some(&home)).unwrap_err();
+        // a folder inside the home folder is a project, in a git repository or not
+        assert_eq!(project_root(&home.join("docs"), Some(&home)).unwrap(), home.join("docs"));
+        let e = refused(&home);
+        assert!(e.contains(&format!("started in {}, your home folder", home.display())), "{e}");
+        assert!(e.contains("--root"), "it says what to do: {e}");
+        assert!(refused(home.parent().unwrap()).contains("a folder above your home folder"));
+        let top = home.ancestors().last().unwrap();
+        assert!(project_root(top, None).unwrap_err().contains("the top of the disk"));
+        // nor does a git repository of the whole home folder (dotfiles) make it one
+        fs::create_dir_all(home.join(".git")).unwrap();
+        let e = refused(&home.join("docs"));
+        assert!(e.contains(&format!("in the git repository {}, your home folder", home.display())), "{e}");
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[tokio::test]
+    async fn without_a_project_every_call_says_why() {
+        let why = "No project folder: add --root".to_string();
+        let core = Core { bin: "mermdraw".into(), root: Err(why.clone()) };
+        assert_eq!(core.resolve("docs/a.md", Want::Doc), Err(why.clone()));
+        assert_eq!(core.resolve(".", Want::DocOrDir), Err(why.clone()));
+        assert_eq!(core.json::<Value>(&["ls", "."], None).await.unwrap_err(), CoreError::Failed(why.clone()));
+        assert_eq!(core.open("docs/a.md", 1, false).await.unwrap_err(), why);
     }
 
     #[cfg(unix)]
@@ -300,7 +359,7 @@ esac
 "#;
         fs::write(&fake, script).unwrap();
         fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
-        let core = Core { bin: fake, root: root.clone() };
+        let core = Core { bin: fake, root: Ok(root.clone()) };
         let v: Value = core.json(&["ok"], None).await.unwrap();
         assert_eq!(v["value"], 7);
         let e = core.json::<Value>(&["conflict"], None).await.unwrap_err();
@@ -315,7 +374,7 @@ esac
         let big = format!("{{\"contract\":1,\"x\":\"{}\"}}", "a".repeat(1 << 20)); // larger than a pipe buffer
         let v: Value = core.json(&["echo"], Some(&big)).await.unwrap();
         assert_eq!(v["x"].as_str().unwrap().len(), 1 << 20);
-        let missing = Core { bin: root.join("nope"), root: root.clone() };
+        let missing = Core { bin: root.join("nope"), root: Ok(root.clone()) };
         assert!(missing.json::<Value>(&["ok"], None).await.unwrap_err().message().contains("cannot find mermdraw"));
         fs::remove_dir_all(&root).unwrap();
     }

@@ -22,7 +22,14 @@ pub struct Mcp {
 impl Mcp {
     /// Starts the server in `root`, using `core` as mermdraw (a path that doesn't exist when the test needs none).
     pub fn start(root: &Path, core: &Path) -> Mcp {
+        Mcp::start_with(root, core, &[], &[])
+    }
+
+    /// `start` with command-line arguments and environment variables.
+    pub fn start_with(root: &Path, core: &Path, args: &[&str], env: &[(&str, &Path)]) -> Mcp {
         let mut child = Command::new(env!("CARGO_BIN_EXE_mermdraw-mcp"))
+            .args(args)
+            .envs(env.iter().copied())
             .current_dir(root)
             .env("MERMDRAW", core)
             .stdin(Stdio::piped())

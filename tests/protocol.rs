@@ -149,6 +149,40 @@ fn discover_probe_then_legacy_fallback() {
 }
 
 #[test]
+fn started_in_the_home_folder_every_tool_asks_for_a_project() {
+    // desktop clients often start servers in the home folder or /; without --root that is no project to work on
+    let home = project("home");
+    std::fs::remove_dir_all(home.join(".git")).unwrap();
+    std::fs::write(home.join("docs/a.md"), "# a\n").unwrap();
+    let env = [("HOME", home.as_path()), ("USERPROFILE", home.as_path())];
+    let mut mcp = Mcp::start_with(&home, &no_core(&home), &[], &env);
+    // it still starts and lists its tools, so the client shows it and the agent can relay the error
+    assert_eq!(tool_names(&mcp.modern("tools/list", json!({}))["result"]), TOOLS);
+    let calls = [
+        ("list_diagrams", json!({})),
+        ("read_diagram", json!({"file": "docs/a.md"})),
+        ("write_diagram", json!({"file": "docs/a.md", "index": 1, "source": "graph TD", "version": "x"})),
+        ("add_diagram", json!({"file": "docs/a.md", "source": "graph TD"})),
+        ("search_icons", json!({"query": "postgres"})),
+        ("open_diagram", json!({"file": "docs/a.md", "open_browser": false})),
+    ];
+    for (tool, args) in calls {
+        let msg = tool_error(&mcp.call(tool, args));
+        assert!(msg.starts_with("No project folder") && msg.contains("your home folder") && msg.contains("--root"), "{tool}: {msg}");
+    }
+    assert_eq!(std::fs::read_to_string(home.join("docs/a.md")).unwrap(), "# a\n");
+    drop(mcp);
+
+    // a folder inside it is a project, and --root may name the home folder itself
+    for (dir, args) in [(home.join("docs"), vec![]), (home.clone(), vec!["--root", home.to_str().unwrap()])] {
+        let mut mcp = Mcp::start_with(&dir, &no_core(&home), &args, &env);
+        let msg = tool_error(&mcp.call("list_diagrams", json!({})));
+        assert!(msg.contains("cannot find mermdraw"), "past the project check, on to mermdraw ({args:?}): {msg}");
+    }
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
 fn version_and_help_flags() {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_mermdraw-mcp")).arg("--version").output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), format!("mermdraw-mcp {}", env!("CARGO_PKG_VERSION")));
