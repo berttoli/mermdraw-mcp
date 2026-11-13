@@ -1,0 +1,17 @@
+name: Daily stability
+
+# The full CI suite once a day, so a new Rust release, a moved dependency or a change on mermdraw main is
+# caught within a day rather than at the next push. (ci.yml already includes a job against mermdraw main.)
+on:
+  schedule:
+    - cron: '43 6 * * *'
+      timezone: America/Los_Angeles
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Full CI
+    uses: ./.github/workflows/ci.yml
